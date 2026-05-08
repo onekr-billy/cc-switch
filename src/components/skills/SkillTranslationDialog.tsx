@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { flushSync } from "react-dom";
 import {
   Dialog,
   DialogContent,
@@ -482,6 +483,7 @@ export const SkillTranslationDialog: React.FC<SkillTranslationDialogProps> = ({
     setActiveRequestId(requestId);
     setIsStreaming(true);
     setTranslatedText("");
+    setLeftActiveTab("translation");
 
     try {
       const disposer = await streamMutation.mutateAsync({
@@ -491,10 +493,12 @@ export const SkillTranslationDialog: React.FC<SkillTranslationDialogProps> = ({
         appType: selectedProviderMeta.appType,
         providerId: selectedProviderMeta.providerId,
         onChunk: (delta) => {
-          setTranslatedText((prev) => {
-            const newText = prev + delta;
-            translatedTextRef.current = newText; // 同步更新 ref
-            return newText;
+          flushSync(() => {
+            setTranslatedText((prev) => {
+              const newText = prev + delta;
+              translatedTextRef.current = newText;
+              return newText;
+            });
           });
         },
         onDone: async () => {
@@ -664,8 +668,11 @@ export const SkillTranslationDialog: React.FC<SkillTranslationDialogProps> = ({
                 <Textarea
                   ref={leftTranslationScrollRef as any}
                   className="flex-1 overflow-auto border rounded-md bg-muted/10 p-3 font-mono text-sm whitespace-pre-wrap resize-none"
-                  value={translatedContent}
-                  onChange={(e) => setTranslatedContent(e.target.value)}
+                  value={isStreaming ? translatedText : translatedContent}
+                  onChange={(e) => {
+                    if (!isStreaming) setTranslatedContent(e.target.value);
+                  }}
+                  readOnly={isStreaming}
                 />
               </TabsContent>
             </Tabs>
@@ -697,7 +704,7 @@ export const SkillTranslationDialog: React.FC<SkillTranslationDialogProps> = ({
               {leftActiveTab === "original" ? (
                 <MarkdownPreview content={originalContent || ""} />
               ) : (
-                <MarkdownPreview content={translatedContent || "暂无译文"} />
+                <MarkdownPreview content={isStreaming ? (translatedText || "暂无译文") : (translatedContent || "暂无译文")} />
               )}
             </div>
           </div>

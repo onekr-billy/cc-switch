@@ -953,9 +953,21 @@ impl SkillService {
 
         // 同步到各应用
         Self::sync_skill_to_all_apps(&skill)?;
+
+        // 从保存的文件中解析name和description并更新到数据库
+        let (name, description) = Self::read_skill_name_desc(&file_path, &skill.name);
+        
+        // 创建更新后的skill对象
+        let mut updated_skill = skill;
+        updated_skill.name = name;
+        updated_skill.description = description;
+
+        // 保存更新后的skill信息到数据库
+        state.db.save_skill(&updated_skill)?;
+
         log::info!("[save_skill_content] END: success");
 
-        Ok(skill)
+        Ok(updated_skill)
     }
 
     /// 同步单个 Skill 到所有已启用的应用
