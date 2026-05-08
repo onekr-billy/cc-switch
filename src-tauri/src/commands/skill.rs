@@ -13,10 +13,21 @@ use crate::services::skill::{
 };
 use crate::store::AppState;
 use std::sync::Arc;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
+use serde::Serialize;
 
 /// SkillService 状态包装
 pub struct SkillServiceState(pub Arc<SkillService>);
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct SkillTranslationStreamPayload {
+    request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delta: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
 
 /// 解析 app 参数为 AppType
 fn parse_app_type(app: &str) -> Result<AppType, String> {
@@ -101,6 +112,113 @@ pub fn toggle_skill_app(
     let app_type = parse_app_type(&app)?;
     SkillService::toggle_app(&app_state.db, &id, &app_type, enabled).map_err(|e| e.to_string())?;
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn translate_skill(
+    id: String,
+    target_lang: String,
+    app_state: State<'_, AppState>,
+) -> Result<InstalledSkill, String> {
+    SkillService::translate_skill(&app_state, &id, &target_lang)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn preview_translation(
+    text: String,
+    target_lang: String,
+    app_state: State<'_, AppState>,
+) -> Result<String, String> {
+    crate::services::translator::TranslatorService::translate(&app_state, &text, &target_lang)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn stream_preview_translation(
+    request_id: String,
+    text: String,
+    target_lang: String,
+    app_type: String,
+    provider_id: String,
+    app_state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<bool, String> {
+    let parsed = parse_app_type(&app_type)?;
+    match parsed {
+        AppType::Gemini | AppType::Claude | AppType::Codex => {}
+        _ => return Err("仅支持 gemini/claude/codex 流式翻译".to_string()),
+    }
+
+    let emit_chunk = |delta: String| -> Result<(), crate::error::AppError> {
+        app.emit(
+            "skill-translation-stream-chunk",
+            SkillTranslationStreamPayload {
+                request_id: request_id.clone(),
+                delta: Some(delta),
+                error: None,
+            },
+        )
+        .map_err(|e| crate::error::AppError::Message(format!("发送翻译分片事件失败: {e}")))
+    };
+
+    let result = crate::services::translator::TranslatorService::translate_stream(
+        &app_state,
+        &text,
+        &target_lang,
+        &parsed,
+        &provider_id,
+        None,
+        emit_chunk,
+    )
+    .await;
+
+    match result {
+        Ok(()) => {
+            app.emit(
+                "skill-translation-stream-done",
+                SkillTranslationStreamPayload {
+                    request_id,
+                    delta: None,
+                    error: None,
+                },
+            )
+            .map_err(|e| format!("发送翻译完成事件失败: {e}"))?;
+            Ok(true)
+        }
+        Err(err) => {
+            let _ = app.emit(
+                "skill-translation-stream-error",
+                SkillTranslationStreamPayload {
+                    request_id,
+                    delta: None,
+                    error: Some(err.to_string()),
+                },
+            );
+            Err(err.to_string())
+        }
+    }
+}
+
+#[tauri::command]
+pub fn get_skill_content(
+    id: String,
+    lang: String,
+    app_state: State<'_, AppState>,
+) -> Result<crate::services::skill::SkillContent, String> {
+    SkillService::get_skill_content(&app_state.db, &id, &lang).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_skill_content(
+    id: String,
+    lang: String,
+    content: String,
+    app_state: State<'_, AppState>,
+) -> Result<InstalledSkill, String> {
+    SkillService::save_skill_content(&app_state, &id, &lang, &content).map_err(|e| e.to_string())
 }
 
 /// 扫描未管理的 Skills

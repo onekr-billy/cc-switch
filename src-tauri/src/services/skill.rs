@@ -14,6 +14,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::timeout;
 
+use crate::AppState;
 use crate::app_config::{AppType, InstalledSkill, SkillApps, UnmanagedSkill};
 use crate::config::get_app_config_dir;
 use crate::database::Database;
@@ -43,6 +44,18 @@ pub enum SkillStorageLocation {
     CcSwitch,
     /// Agent Skills 统一标准目录 (~/.agents/skills/)
     Unified,
+}
+
+/// Skill 内容（用于翻译对照）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillContent {
+    pub original: String,
+    pub translated: Option<String>,
+    pub original_path: Option<String>,
+    pub original_size: Option<u64>,
+    pub translated_path: Option<String>,
+    pub translated_size: Option<u64>,
 }
 
 /// 可发现的技能（来自仓库）
@@ -818,7 +831,154 @@ impl SkillService {
         Ok(SkillUninstallResult { backup_path })
     }
 
-    // ========== 更新检测 ==========
+    /// 翻译 Skill 元数据
+    pub async fn translate_skill(
+        state: &AppState,
+        skill_id: &str,
+        target_lang: &str,
+    ) -> Result<InstalledSkill> {
+        let skill = state.db.get_installed_skill(skill_id)?
+            .ok_or_else(|| anyhow!("Skill not found: {}", skill_id))?;
+
+        let ssot_dir = Self::get_ssot_dir()?;
+        let skill_dir = ssot_dir.join(&skill.directory);
+        let skill_md_path = skill_dir.join("SKILL.md");
+
+        if !skill_md_path.exists() {
+            return Err(anyhow!("SKILL.md not found in {}", skill.directory));
+        }
+
+        let content = fs::read_to_string(&skill_md_path)?;
+
+        // 调用翻译服务
+        let translated = crate::services::TranslatorService::translate(state, &content, target_lang).await
+            .map_err(|e| anyhow!("翻译服务调用失败: {}", e))?;
+
+        // 保存翻译后的文件
+        let translated_filename = if target_lang == "zh" || target_lang.contains("Chinese") {
+            "SKILL.zh.md"
+        } else {
+            &format!("SKILL.{}.md", target_lang)
+        };
+
+        let translated_path = skill_dir.join(translated_filename);
+        fs::write(&translated_path, translated)?;
+
+        Ok(skill)
+    }
+
+    /// 获取 Skill 内容
+    pub fn get_skill_content(
+        db: &Database,
+        skill_id: &str,
+        lang: &str,
+    ) -> Result<SkillContent> {
+        let skill = db.get_installed_skill(skill_id)?
+            .ok_or_else(|| anyhow!("Skill not found: {}", skill_id))?;
+
+        let ssot_dir = Self::get_ssot_dir()?;
+        let skill_dir = ssot_dir.join(&skill.directory);
+
+        let skill_md_path = skill_dir.join("SKILL.md");
+        let original = fs::read_to_string(&skill_md_path)
+            .context("Failed to read original SKILL.md")?;
+
+        let translated_path = skill_dir.join(format!("SKILL.{}.md", lang));
+
+        log::info!("[get_skill_content] skill_id={}, lang={}, translated_path exists={}",
+                   skill_id, lang, translated_path.exists());
+
+        let translated = if translated_path.exists() {
+            let content = fs::read_to_string(&translated_path).unwrap_or_default();
+            log::info!("[get_skill_content] returning translated content, length={}", content.len());
+            Some(content)
+        } else {
+            log::info!("[get_skill_content] translated file does not exist");
+            None
+        };
+
+        Ok(SkillContent {
+            original_size: Some(original.len() as u64),
+            original_path: Some(skill_md_path.to_string_lossy().to_string()),
+            original,
+            translated_size: translated.as_ref().map(|t| t.len() as u64),
+            translated_path: if translated_path.exists() {
+                Some(translated_path.to_string_lossy().to_string())
+            } else {
+                None
+            },
+            translated,
+        })
+    }
+
+    /// 保存 Skill 内容
+    pub fn save_skill_content(
+        state: &AppState,
+        skill_id: &str,
+        lang: &str,
+        content: &str,
+    ) -> Result<InstalledSkill> {
+        log::info!("[save_skill_content] START: skill_id={}, lang={}, content_length={}",
+                   skill_id, lang, content.len());
+
+        let skill = state.db.get_installed_skill(skill_id)?
+            .ok_or_else(|| anyhow!("Skill not found: {}", skill_id))?;
+
+        let ssot_dir = Self::get_ssot_dir()?;
+        let skill_dir = ssot_dir.join(&skill.directory);
+
+        log::info!("[save_skill_content] ssot_dir={:?}, skill_dir={:?}", ssot_dir, skill_dir);
+
+        // 根据lang参数决定保存到哪文件
+        let file_name = if lang == "original" {
+            "SKILL.md".to_string()
+        } else {
+            format!("SKILL.{}.md", lang)
+        };
+        let file_path = skill_dir.join(&file_name);
+
+        log::info!("[save_skill_content] writing to: {:?}", file_path);
+
+        fs::write(&file_path, content)?;
+
+        log::info!("[save_skill_content] file written successfully");
+
+        // 验证文件是否真的被写入
+        if file_path.exists() {
+            let written_size = fs::metadata(&file_path)?.len();
+            log::info!("[save_skill_content] verification: file exists, size={}", written_size);
+        } else {
+            log::error!("[save_skill_content] verification FAILED: file does not exist after write!");
+        }
+
+        // 同步到各应用
+        Self::sync_skill_to_all_apps(&skill)?;
+        log::info!("[save_skill_content] END: success");
+
+        Ok(skill)
+    }
+
+    /// 同步单个 Skill 到所有已启用的应用
+    pub fn sync_skill_to_all_apps(skill: &InstalledSkill) -> Result<()> {
+        let apps = [
+            AppType::Claude,
+            AppType::Codex,
+            AppType::Gemini,
+            AppType::OpenCode,
+            AppType::OpenClaw,
+            AppType::Hermes,
+        ];
+        
+        for app in apps {
+            if skill.apps.is_enabled_for(&app) {
+                if let Err(e) = Self::sync_to_app_dir(&skill.directory, &app) {
+                    log::warn!("同步 Skill {} 到 {:?} 失败: {}", skill.name, app, e);
+                }
+            }
+        }
+        
+        Ok(())
+    }
 
     /// 计算目录内容的 SHA-256 哈希
     ///
@@ -844,6 +1004,14 @@ impl SkillService {
         }
 
         Ok(format!("{:x}", hasher.finalize()))
+    }
+    
+    /// 计算字符串内容的 SHA-256 哈希
+    pub fn compute_hash(content: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        format!("{:x}", hasher.finalize())
     }
 
     /// 递归收集目录下所有非隐藏文件
@@ -1985,8 +2153,16 @@ impl SkillService {
 
     /// 从 SKILL.md 读取名称和描述，不存在则用目录名兜底
     fn read_skill_name_desc(skill_md: &Path, fallback_name: &str) -> (String, Option<String>) {
-        if skill_md.exists() {
-            match Self::parse_skill_metadata_static(skill_md) {
+        // 优先尝试加载中文翻译文件
+        let zh_md = skill_md.with_file_name("SKILL.zh.md");
+        let target_md = if zh_md.exists() {
+            &zh_md
+        } else {
+            skill_md
+        };
+
+        if target_md.exists() {
+            match Self::parse_skill_metadata_static(target_md) {
                 Ok(meta) => (
                     meta.name.unwrap_or_else(|| fallback_name.to_string()),
                     meta.description,

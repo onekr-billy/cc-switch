@@ -17,6 +17,7 @@ pub mod skill;
 pub mod speedtest;
 pub mod stream_check;
 pub mod subscription;
+pub mod translator;
 pub mod usage_cache;
 pub mod usage_stats;
 pub mod webdav;
@@ -29,6 +30,7 @@ pub use omo::OmoService;
 pub use prompt::PromptService;
 pub use provider::{ProviderService, ProviderSortUpdate, SwitchResult};
 pub use proxy::ProxyService;
+pub use translator::TranslatorService;
 #[allow(unused_imports)]
 pub use skill::{DiscoverableSkill, Skill, SkillRepo, SkillService};
 pub use speedtest::{EndpointLatency, SpeedtestService};

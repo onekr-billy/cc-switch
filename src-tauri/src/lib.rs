@@ -470,6 +470,16 @@ pub fn run() {
                 Err(e) => log::warn!("✗ Failed to read skills migration flag: {e}"),
             }
 
+            // 1.4b. 为旧版本安装的 Skill 补算 content_hash
+            match crate::services::skill::SkillService::backfill_content_hashes(&app_state.db) {
+                Ok(count) => {
+                    if count > 0 {
+                        log::info!("✓ Backfilled content hashes for {count} skill(s)");
+                    }
+                }
+                Err(e) => log::warn!("✗ Failed to backfill skill content hashes: {e}"),
+            }
+
             // 1.5. 自动导入 live 配置 + seed 官方预设供应商（Claude / Codex / Gemini）
             //
             // 先 import 后 seed 是有意为之：先把用户手动配置的 settings.json / auth.json / .env
@@ -1156,6 +1166,11 @@ pub fn run() {
             commands::uninstall_skill_unified,
             commands::restore_skill_backup,
             commands::toggle_skill_app,
+            commands::translate_skill,
+            commands::preview_translation,
+            commands::stream_preview_translation,
+            commands::get_skill_content,
+            commands::save_skill_content,
             commands::scan_unmanaged_skills,
             commands::import_skills_from_apps,
             commands::discover_available_skills,

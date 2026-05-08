@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-query";
 import {
   skillsApi,
+  type StreamTranslateOptions,
   type SkillBackupEntry,
   type DiscoverableSkill,
   type ImportSkillSelection,
@@ -322,6 +323,67 @@ export function useUpdateSkill() {
         },
       );
     },
+  });
+}
+
+/**
+ * 翻译 Skill
+ */
+export function useTranslateSkill() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, targetLang }: { id: string; targetLang: string }) =>
+      skillsApi.translateSkill(id, targetLang),
+    onSuccess: (updatedSkill) => {
+      queryClient.setQueryData<InstalledSkill[]>(
+        ["skills", "installed"],
+        (oldData) => {
+          if (!oldData) return [updatedSkill];
+          return oldData.map((s) => (s.id === updatedSkill.id ? updatedSkill : s));
+        },
+      );
+    },
+  });
+}
+
+/**
+ * 获取 Skill 内容
+ */
+export function useSkillContent(id: string | null, lang: string) {
+  return useQuery({
+    queryKey: ["skill-content", id, lang],
+    queryFn: () => skillsApi.getSkillContent(id!, lang),
+    enabled: !!id,
+  });
+}
+
+export function usePreviewTranslation() {
+  return useMutation({
+    mutationFn: (vars: { text: string; targetLang: string }) =>
+      skillsApi.previewTranslation(vars.text, vars.targetLang),
+  });
+}
+
+export function useSaveSkillContent() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (vars: { id: string; lang: string; content: string }) =>
+      skillsApi.saveSkillContent(vars.id, vars.lang, vars.content),
+    onSuccess: (updated) => {
+      queryClient.setQueryData<InstalledSkill[]>(["skills", "installed"], (old) =>
+        old?.map((s) => (s.id === updated.id ? updated : s)),
+      );
+      // 同时使内容查询失效
+      queryClient.invalidateQueries({ queryKey: ["skill-content", updated.id] });
+    },
+  });
+}
+
+export function useStreamPreviewTranslation() {
+  return useMutation({
+    mutationFn: (vars: StreamTranslateOptions) =>
+      skillsApi.streamPreviewTranslation(vars),
   });
 }
 

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { AppId } from "@/lib/api/types";
 
@@ -129,6 +130,34 @@ export interface SkillRepo {
   enabled: boolean;
 }
 
+export interface SkillContent {
+  original: String;
+  translated?: string;
+  originalPath?: string;
+  originalSize?: number;
+  translatedPath?: string;
+  translatedSize?: number;
+}
+
+export type TranslationAppType = "gemini" | "claude" | "codex";
+
+export interface SkillTranslationStreamPayload {
+  requestId: string;
+  delta?: string;
+  error?: string;
+}
+
+export interface StreamTranslateOptions {
+  requestId: string;
+  text: string;
+  targetLang: string;
+  appType: TranslationAppType;
+  providerId: string;
+  onChunk: (delta: string) => void;
+  onDone: () => void;
+  onError: (error: string) => void;
+}
+
 // ========== API ==========
 
 export const skillsApi = {
@@ -216,6 +245,83 @@ export const skillsApi = {
     offset: number,
   ): Promise<SkillsShSearchResult> {
     return await invoke("search_skills_sh", { query, limit, offset });
+  },
+
+  /** 翻译 Skill 元数据 */
+  async translateSkill(id: string, targetLang: string): Promise<InstalledSkill> {
+    return await invoke("translate_skill", { id, targetLang });
+  },
+
+  /** 获取 Skill 内容（用于对照） */
+  async getSkillContent(id: string, lang: string): Promise<SkillContent> {
+    return await invoke("get_skill_content", { id, lang });
+  },
+
+  /** 预览翻译 */
+  async previewTranslation(text: string, targetLang: string): Promise<string> {
+    return await invoke("preview_translation", { text, targetLang });
+  },
+
+  /** 保存 Skill 内容 */
+  async saveSkillContent(
+    id: string,
+    lang: string,
+    content: string,
+  ): Promise<InstalledSkill> {
+    return await invoke("save_skill_content", { id, lang, content });
+  },
+
+  async streamPreviewTranslation(options: StreamTranslateOptions): Promise<UnlistenFn> {
+    const { requestId, text, targetLang, appType, providerId, onChunk, onDone, onError } =
+      options;
+    let finished = false;
+    const markFinished = () => {
+      finished = true;
+    };
+    const offChunk = await listen<SkillTranslationStreamPayload>(
+      "skill-translation-stream-chunk",
+      (event) => {
+        const payload = event.payload;
+        if (payload.requestId !== requestId) return;
+        onChunk(payload.delta ?? "");
+      },
+    );
+    const offDone = await listen<SkillTranslationStreamPayload>(
+      "skill-translation-stream-done",
+      (event) => {
+        const payload = event.payload;
+        if (payload.requestId !== requestId) return;
+        markFinished();
+        onDone();
+      },
+    );
+    const offError = await listen<SkillTranslationStreamPayload>(
+      "skill-translation-stream-error",
+      (event) => {
+        const payload = event.payload;
+        if (payload.requestId !== requestId) return;
+        markFinished();
+        onError(payload.error || "translation stream failed");
+      },
+    );
+
+    void invoke("stream_preview_translation", {
+      requestId,
+      text,
+      targetLang,
+      appType,
+      providerId,
+    }).catch((error) => {
+      if (finished) return;
+      markFinished();
+      onError(String(error));
+    });
+
+    return () => {
+      offChunk();
+      offDone();
+      offError();
+    };
   },
 
   // ========== 兼容旧 API ==========

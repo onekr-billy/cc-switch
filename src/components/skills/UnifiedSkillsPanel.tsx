@@ -6,6 +6,7 @@ import {
   ExternalLink,
   RefreshCw,
   Loader2,
+  Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +25,7 @@ import {
   useInstallSkillsFromZip,
   useCheckSkillUpdates,
   useUpdateSkill,
+  useTranslateSkill,
   type InstalledSkill,
   type SkillUpdateInfo,
 } from "@/hooks/useSkills";
@@ -43,6 +45,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { SkillTranslationDialog } from "./SkillTranslationDialog";
 
 interface UnifiedSkillsPanelProps {
   onOpenDiscovery: () => void;
@@ -68,7 +71,7 @@ const UnifiedSkillsPanel = React.forwardRef<
   UnifiedSkillsPanelHandle,
   UnifiedSkillsPanelProps
 >(({ onOpenDiscovery, currentApp }, ref) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [confirmDialog, setConfirmDialog] = useState<{
     isOpen: boolean;
     title: string;
@@ -101,6 +104,11 @@ const UnifiedSkillsPanel = React.forwardRef<
   } = useCheckSkillUpdates();
   const updateSkillMutation = useUpdateSkill();
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
+  const [translatingSkill, setTranslatingSkill] = useState<InstalledSkill | null>(null);
+
+  const handleTranslateSkill = (skill: InstalledSkill) => {
+    setTranslatingSkill(skill);
+  };
 
   const updatesMap = useMemo(() => {
     const map: Record<string, SkillUpdateInfo> = {};
@@ -424,12 +432,12 @@ const UnifiedSkillsPanel = React.forwardRef<
                   skill={skill}
                   hasUpdate={!!updatesMap[skill.id]}
                   isUpdating={
-                    updateSkillMutation.isPending &&
-                    updateSkillMutation.variables === skill.id
+                    isUpdatingAll || updateSkillMutation.isPending
                   }
                   onToggleApp={handleToggleApp}
-                  onUninstall={() => handleUninstall(skill)}
+                  onUninstall={() => setUninstallingSkill(skill)}
                   onUpdate={() => handleUpdateSkill(skill)}
+                  onTranslate={() => handleTranslateSkill(skill)}
                   isLast={index === skills.length - 1}
                 />
               ))}
@@ -470,6 +478,11 @@ const UnifiedSkillsPanel = React.forwardRef<
         onClose={() => setRestoreDialogOpen(false)}
         open={restoreDialogOpen}
       />
+      <SkillTranslationDialog
+        skill={translatingSkill}
+        open={!!translatingSkill}
+        onClose={() => setTranslatingSkill(null)}
+      />
     </div>
   );
 });
@@ -483,6 +496,8 @@ interface InstalledSkillListItemProps {
   onToggleApp: (id: string, app: AppId, enabled: boolean) => void;
   onUninstall: () => void;
   onUpdate?: () => void;
+  onTranslate?: () => void;
+  isTranslating?: boolean;
   isLast?: boolean;
 }
 
@@ -493,6 +508,8 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
   onToggleApp,
   onUninstall,
   onUpdate,
+  onTranslate,
+  isTranslating,
   isLast,
 }) => {
   const { t } = useTranslation();
@@ -516,7 +533,7 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
   return (
     <ListItemRow isLast={isLast}>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 cursor-pointer" onClick={onTranslate}>
           <span className="font-medium text-sm text-foreground truncate">
             {skill.name}
           </span>

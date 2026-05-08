@@ -111,7 +111,7 @@ interface WebDavSyncStatusUpdatedPayload {
   error?: string;
 }
 
-const DEFAULT_DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 28; // px
+const DEFAULT_DRAG_BAR_HEIGHT = isWindows() || isLinux() ? 0 : 0; // px
 const HEADER_HEIGHT = 64; // px
 
 const STORAGE_KEY = "cc-switch-last-app";
@@ -1042,12 +1042,12 @@ function App() {
 
   return (
     <div
-      className="flex flex-col h-screen overflow-hidden bg-background text-foreground selection:bg-primary/30 pb-4"
+      className="flex flex-col h-screen overflow-hidden bg-background text-foreground selection:bg-primary/30"
       style={{ overflowX: "hidden", paddingTop: contentTopOffset }}
     >
       {(dragBarHeight > 0 || useAppWindowControls) && (
         <div
-          className="fixed top-0 left-0 right-0 z-[70] flex items-center justify-end px-2"
+          className="fixed top-0 left-0 right-0 z-[70] flex items-center justify-end"
           data-tauri-drag-region
           style={{ WebkitAppRegion: "drag", height: dragBarHeight } as any}
         >
