@@ -64,6 +64,7 @@ use tauri::image::Image;
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::RunEvent;
 use tauri::{Emitter, Manager};
+use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 fn redact_url_for_log(url_str: &str) -> String {
     match url::Url::parse(url_str) {
@@ -264,6 +265,7 @@ pub fn run() {
                         tray::apply_tray_policy(window.app_handle(), false);
                     }
                 } else {
+                    api.prevent_close();
                     window.app_handle().exit(0);
                 }
             }
@@ -272,6 +274,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state_flags())
+                .build(),
+        )
         .setup(|app| {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
@@ -758,6 +765,7 @@ pub fn run() {
 
             // 构建托盘
             let mut tray_builder = TrayIconBuilder::with_id(tray::TRAY_ID)
+                .tooltip("CC Switch") // 鼠标悬停提示
                 .on_tray_icon_event(|tray, event| match event {
                     // 鼠标悬停/点击到托盘图标时，后台异步刷新用量缓存，
                     // 让用户下一次（或快速打开菜单的那一刻）看到较新的数字。
@@ -959,10 +967,6 @@ pub fn run() {
                         "Gemini usage initial sync",
                         crate::services::session_usage_gemini::sync_gemini_usage(db),
                     );
-                    run_step(
-                        "Hermes usage initial sync",
-                        crate::services::session_usage_hermes::sync_hermes_usage(db),
-                    );
 
                     // 定期同步
                     let mut interval = tokio::time::interval(std::time::Duration::from_secs(
@@ -982,10 +986,6 @@ pub fn run() {
                         run_step(
                             "Gemini usage periodic sync",
                             crate::services::session_usage_gemini::sync_gemini_usage(db),
-                        );
-                        run_step(
-                            "Hermes usage periodic sync",
-                            crate::services::session_usage_hermes::sync_hermes_usage(db),
                         );
                     }
                 });
@@ -1365,6 +1365,7 @@ pub fn run() {
 
             let app_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
+                save_window_state_before_exit(&app_handle);
                 cleanup_before_exit(&app_handle).await;
                 log::info!("清理完成，退出应用");
 
@@ -1770,4 +1771,22 @@ fn show_database_init_error_dialog(
             exit_text.to_string(),
         ))
         .blocking_show()
+}
+
+// ============================================================
+// 在应用主动退出前显式持久化窗口状态
+// ============================================================
+
+fn window_state_flags() -> StateFlags {
+    StateFlags::POSITION | StateFlags::SIZE | StateFlags::MAXIMIZED
+}
+
+/// 当前应用的退出路径会拦截 `ExitRequested` 并最终直接 `std::process::exit(0)`，
+/// 这里需要在真正结束进程前手动落盘，避免 window-state 插件的默认退出钩子被绕过。
+pub fn save_window_state_before_exit(app_handle: &tauri::AppHandle) {
+    if let Err(err) = app_handle.save_window_state(window_state_flags()) {
+        log::error!("退出前保存窗口状态失败: {err}");
+    } else {
+        log::info!("已在退出前保存窗口状态");
+    }
 }
